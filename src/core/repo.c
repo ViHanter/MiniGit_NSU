@@ -1,4 +1,5 @@
 #include "repo.h"
+#include "commit.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -171,6 +172,93 @@ char **repo_list_branches(Repository *repo, int *count) {
     return names;
 }
 
+static void add_changed_path(char ***paths, int *count, int *capacity, const char *path) {
+    if (!paths || !count || !capacity || !path) return;
+
+    if (*count >= *capacity) {
+        int new_capacity = *capacity == 0 ? 8 : *capacity * 2;
+        char **new_paths = (char**)realloc(*paths, new_capacity * sizeof(char*));
+        if (!new_paths) return;
+
+        *paths = new_paths;
+        *capacity = new_capacity;
+    }
+    (*paths)[(*count)++] = strdup(path);
+}
+
+static void overlay_tree(TreeNode **target_tree, TreeNode *source_node, const char *prefix,
+                         char ***changed, int *changed_count, int *changed_capacity) {
+    if (!target_tree || !source_node) return;
+
+    char path[1024];
+    if (!source_node->name || strlen(source_node->name) == 0) {
+        snprintf(path, sizeof(path), "%s", prefix ? prefix : "");
+    } else if (prefix && strlen(prefix) > 0) {
+        snprintf(path, sizeof(path), "%s/%s", prefix, source_node->name);
+    } else {
+        snprintf(path, sizeof(path), "%s", source_node->name);
+    }
+
+    if (source_node->is_directory) {
+        for (int i = 0; i < source_node->children_count; i++) {
+            overlay_tree(target_tree, source_node->children[i], path,
+                         changed, changed_count, changed_capacity);
+        }
+        return;
+    }
+
+    if (path[0] == '\0' || !source_node->blob) return;
+
+    Blob *blob = create_blob(source_node->blob->content, source_node->blob->size);
+    TreeNode *new_tree = copy_tree_with_change(*target_tree, path, blob);
+    if (!new_tree) {
+        free_blob(blob);
+        return;
+    }
+
+    free_tree_node(*target_tree);
+    *target_tree = new_tree;
+    add_changed_path(changed, changed_count, changed_capacity, path);
+}
+
+Commit *merge_simple(Repository *repo, Commit *base, Commit *other, const char *message) {
+    if (!base || !other) return base;
+
+    TreeNode *merged_tree = copy_tree_with_change(base->root, "", NULL);
+    char **changed = NULL;
+    int changed_count = 0;
+    int changed_capacity = 0;
+
+    overlay_tree(&merged_tree, other->root, "", &changed, &changed_count, &changed_capacity);
+
+    Commit *new_commit = create_commit(
+        base,
+        merged_tree,
+        message && strlen(message) > 0 ? message : "Merge",
+        changed,
+        changed_count
+    );
+
+    for (int i = 0; i < changed_count; i++) {
+        free(changed[i]);
+    }
+    free(changed);
+
+    if (!new_commit) {
+        free_tree_node(merged_tree);
+        return NULL;
+    }
+
+    if (repo) {
+        repo_add_commit(repo, new_commit);
+        if (repo->current_branch_name) {
+            repo_update_branch(repo, repo->current_branch_name, new_commit);
+        }
+        repo_set_head(repo, new_commit);
+    }
+    return new_commit;
+}
+
 void repo_print_status(Repository *repo) {
     if (!repo) return;
     
@@ -183,4 +271,14 @@ void repo_print_status(Repository *repo) {
         printf("%s ", repo->branches[i].name);
     }
     printf("\n");
+}
+
+void free_branches(void) {
+    // В нашей реализации ветки хранятся в структуре Repository,
+    // которая освобождается через repo_destroy().
+    // Эта функция оставлена для совместимости с main.c.
+    // Можно оставить пустой или добавить логирование.
+    #ifdef DEBUG
+    printf("free_branches() called (branches are freed with repo_destroy)\n");
+    #endif
 }
