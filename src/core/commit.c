@@ -271,6 +271,62 @@ void print_files(Commit *commit) {
     free(files);
 }
 
+static int path_in_list(char **files, int count, const char *path) {
+    for (int i = 0; i < count; i++) {
+        if (strcmp(files[i], path) == 0) return 1;
+    }
+    return 0;
+}
+
+static void free_file_list(char **files, int count) {
+    if (!files) return;
+    for (int i = 0; i < count; i++) {
+        free(files[i]);
+    }
+    free(files);
+}
+
+static void collect_commit_files(Commit *commit, char ***files, int *count, int *capacity) {
+    *files = NULL;
+    *count = 0;
+    *capacity = 0;
+    if (commit && commit->root) {
+        traverse_tree(commit->root, "", files, count, capacity);
+    }
+}
+
+int restore_commit_files(Commit *previous_commit, Commit *target_commit) {
+    if (!target_commit || !target_commit->root) return 0;
+
+    char **old_files = NULL;
+    char **new_files = NULL;
+    int old_count = 0, new_count = 0;
+    int old_capacity = 0, new_capacity = 0;
+    int ok = 1;
+
+    collect_commit_files(previous_commit, &old_files, &old_count, &old_capacity);
+    collect_commit_files(target_commit, &new_files, &new_count, &new_capacity);
+
+    for (int i = 0; i < old_count; i++) {
+        if (!path_in_list(new_files, new_count, old_files[i])) {
+            if (!remove_text_file(old_files[i])) {
+                ok = 0;
+            }
+        }
+    }
+
+    for (int i = 0; i < new_count; i++) {
+        Blob *blob = find_blob_by_path(target_commit->root, new_files[i]);
+        if (!blob || !write_text_file(new_files[i], blob->content, blob->size)) {
+            ok = 0;
+        }
+    }
+
+    free_file_list(old_files, old_count);
+    free_file_list(new_files, new_count);
+    return ok;
+}
+
 Commit *find_commit_by_id(Commit **all_commits, int count, int id) {
     if (!all_commits) return NULL;
 

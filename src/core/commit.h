@@ -23,6 +23,7 @@ int file_exists(Commit *commit, const char *path);
 void print_commit(Commit *commit);
 void print_history(Commit *commit);
 void print_files(Commit *commit);
+int restore_commit_files(Commit *previous_commit, Commit *target_commit);
 
 // Управление памятью
 void free_commit(Commit *commit);
