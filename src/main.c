@@ -17,6 +17,7 @@
 #include "core/repo.h"
 #include "core/staging.h"
 #include "core/repo_storage.h"
+#include "utils.h" 
 
 // ================ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ================
 
@@ -53,6 +54,7 @@ static void print_help(void) {
     printf("║   pwd                           - показать текущую директорию репозитория       ║\n");
     printf("║   help, ?                       - эта справка                                   ║\n");
     printf("║   exit, q                       - выход                                         ║\n");
+    printf("║   close                         - закрыть текущий репозиторий                   ║\n");
     printf("╚═════════════════════════════════════════════════════════════════════════════════╝\n");
 }
 
@@ -107,6 +109,53 @@ static void auto_load_repo(void) {
 }
 
 // ================ КОМАНДЫ ================
+static void cmd_add_file(char *filename) {
+    if (!repo) {
+        printf("❌ Репозиторий не инициализирован. Введите 'init'\n");
+        return;
+    }
+    
+    if (!filename || strlen(filename) == 0) {
+        printf("❌ Использование: add <имя_файла>\n");
+        return;
+    }
+    
+    // Читаем содержимое файла с диска
+    size_t file_size;
+    char *content = read_text_file(filename, &file_size);
+    if (!content) {
+        printf("❌ Файл '%s' не найден или не может быть прочитан\n", filename);
+        return;
+    }
+    
+    staging_add_file(staging, filename, content);
+    free(content);
+    
+    printf("✅ Файл '%s' добавлен в staging\n", filename);
+}
+
+static void cmd_close(void) {
+    if (repo) {
+        // Сохраняем состояние перед закрытием
+        repo_save_state(repo);
+        
+        // Очищаем staging
+        if (staging) {
+            staging_destroy(staging);
+            staging = NULL;
+        }
+        
+        // Очищаем репозиторий
+        free_branches();
+        repo_destroy(repo);
+        repo = NULL;
+        current_commit = NULL;
+        
+        printf("✅ Репозиторий закрыт. Можно создать или загрузить новый.\n");
+    } else {
+        printf("❌ Нет открытого репозитория.\n");
+    }
+}
 
 static void cmd_load(char *args) {
     if (repo) {
@@ -613,6 +662,12 @@ int main(void) {
         }
         else if (strcmp(cmd, "load") == 0) {
             cmd_load(args);
+        }
+        else if (strcmp(cmd, "close") == 0) {
+            cmd_close();
+        }
+        else if (strcmp(cmd, "add-file") == 0) {
+            cmd_add_file(args);
         }
         else if (strcmp(cmd, "pwd") == 0) {
             if (repo) {
