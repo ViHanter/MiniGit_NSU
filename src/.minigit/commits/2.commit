@@ -1,0 +1,8 @@
+id=2
+message="First commit with two files"
+timestamp=1779370351
+parent_id=1
+hash=00000000876ed28f
+changed_files_count=2
+changed_file=hello.txt
+changed_file=test.txt

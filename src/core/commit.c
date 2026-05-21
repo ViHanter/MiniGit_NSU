@@ -9,7 +9,7 @@
 
 static int next_commit_id = 1;
 
-static void add_child_commit(Commit *parent, Commit *child) {
+void add_child_commit(Commit *parent, Commit *child) {
     if (!parent || !child) return;
 
     if (parent->children_count >= parent->children_capacity) {

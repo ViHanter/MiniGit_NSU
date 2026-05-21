@@ -4,7 +4,11 @@
 #include <locale.h>
 
 #ifdef _WIN32
+    #include <direct.h>
     #include <windows.h>
+    #include <dirent.h>
+#else
+    #include <unistd.h>
 #endif
 
 #include "core/types.h"
@@ -12,6 +16,7 @@
 #include "core/commit.h"
 #include "core/repo.h"
 #include "core/staging.h"
+#include "core/repo_storage.h"
 
 // ================ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ================
 
@@ -23,35 +28,136 @@ static StagingArea *staging = NULL;
 
 static void print_help(void) {
     printf("\n");
-    printf("╔════════════════════════════════════════════════════════════════════════╗\n");
-    printf("║                         🚀 MiniGit Shell 🚀                            ║\n");
-    printf("╠════════════════════════════════════════════════════════════════════════╣\n");
-    printf("║ 📖 Команды:                                                             ║\n");
-    printf("║   init                          - инициализировать репозиторий         ║\n");
-    printf("║   add <файл> <содержимое>       - добавить файл в staging              ║\n");
-    printf("║   rm <файл>                     - удалить файл из staging              ║\n");
-    printf("║   commit <сообщение>            - создать коммит из staging            ║\n");
-    printf("║   status                        - показать статус staging              ║\n");
-    printf("║   cat <файл>                    - показать содержимое файла            ║\n");
-    printf("║   exists <файл>                 - проверить существование файла        ║\n");
-    printf("║   ls                            - список файлов в текущем коммите      ║\n");
-    printf("║   log                           - история коммитов                     ║\n");
-    printf("║   branch <имя>                  - создать ветку                        ║\n");
-    printf("║   checkout <ветка>              - переключиться на ветку               ║\n");
-    printf("║   branches                      - показать все ветки                   ║\n");
-    printf("║   merge <ветка>                 - простое слияние ветки                ║\n");
-    printf("║   count                         - посчитать tree/blob объекты          ║\n");
-    printf("║   reset                         - отменить все изменения в staging    ║\n");
-    printf("║   help, ?                       - эта справка                          ║\n");
-    printf("║   exit, q                       - выход                                ║\n");
-    printf("╚════════════════════════════════════════════════════════════════════════╝\n");
+    printf("╔═════════════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║                           MiniGit Shell                                         ║\n");
+    printf("╠═════════════════════════════════════════════════════════════════════════════════╣\n");
+    printf("║   Команды:                                                                      ║\n");
+    printf("║   init                          - инициализировать репозиторий                  ║\n");
+    printf("║   add <файл> <содержимое>       - добавить файл в staging                       ║\n");
+    printf("║   rm <файл>                     - удалить файл из staging                       ║\n");
+    printf("║   commit <сообщение>            - создать коммит из staging                     ║\n");
+    printf("║   status                        - показать статус staging                       ║\n");
+    printf("║   cat <файл>                    - показать содержимое файла                     ║\n");
+    printf("║   exists <файл>                 - проверить существование файла                 ║\n");
+    printf("║   ls                            - список файлов в текущем коммите               ║\n");
+    printf("║   log                           - история коммитов                              ║\n");
+    printf("║   branch <имя>                  - создать ветку                                 ║\n");
+    printf("║   checkout <ветка>              - переключиться на ветку                        ║\n");
+    printf("║   branches                      - показать все ветки                            ║\n");
+    printf("║   merge <ветка>                 - простое слияние ветки                         ║\n");
+    printf("║   count                         - посчитать tree/blob объекты                   ║\n");
+    printf("║   reset                         - отменить все изменения в staging              ║\n");
+    printf("║   init                          - инициализировать репозиторий в текущей папке  ║\n");
+    printf("║   init-dir <путь>               - инициализировать в указанной папке            ║\n");
+    printf("║   load [путь]                   - загрузить существующий репозиторий            ║\n");
+    printf("║   pwd                           - показать текущую директорию репозитория       ║\n");
+    printf("║   help, ?                       - эта справка                                   ║\n");
+    printf("║   exit, q                       - выход                                         ║\n");
+    printf("╚═════════════════════════════════════════════════════════════════════════════════╝\n");
 }
 
 static void print_status_line(const char *label, const char *value) {
     printf("  %-15s: %s\n", label, value);
 }
 
+static char *find_existing_repo(void) {
+    char cwd[1024];
+    if (!getcwd(cwd, sizeof(cwd))) return NULL;
+    
+    // Нормализуем путь
+    for (char *p = cwd; *p; p++) {
+        if (*p == '\\') *p = '/';
+    }
+    
+    char *path = strdup(cwd);
+    while (1) {
+        char test_path[1024];
+        // Используем двойные обратные слеши для Windows или прямые
+        snprintf(test_path, sizeof(test_path), "%s/.minigit", path);
+        
+        // Пробуем открыть как файл (проверяем существование директории)
+        DIR *dir = opendir(test_path);
+        if (dir) {
+            closedir(dir);
+            printf("DEBUG: Found repo at: %s\n", path);
+            return path;
+        }
+        
+        char *last_slash = strrchr(path, '/');
+        if (!last_slash || last_slash == path) break;
+        *last_slash = '\0';
+    }
+    
+    free(path);
+    return NULL;
+}
+
+static void auto_load_repo(void) {
+    char *repo_path = find_existing_repo();
+    if (repo_path) {
+        printf("\n📂 Found existing repository in: %s\n", repo_path);
+        printf("   Loading...\n");
+        repo = repo_load_from_dir(repo_path);
+        if (repo) {
+            current_commit = repo_get_head(repo);
+            staging = staging_create(current_commit);
+        }
+        free(repo_path);
+    }
+}
+
 // ================ КОМАНДЫ ================
+
+static void cmd_load(char *args) {
+    if (repo) {
+        printf("❌ Репозиторий уже загружен!\n");
+        return;
+    }
+    
+    char *dir = args ? args : ".";
+    
+    repo = repo_load_from_dir(dir);
+    if (!repo) return;
+    
+    current_commit = repo_get_head(repo);
+    staging = staging_create(current_commit);
+}
+
+static void cmd_init_in_dir(char *args) {
+    if (repo) {
+        printf("❌ Репозиторий уже загружен!\n");
+        printf("   Сначала выйдите (exit), затем войдите заново\n");
+        return;
+    }
+    
+    char *dir = args ? args : ".";
+    if (dir[0] == '"' || dir[0] == '\'') {
+        char quote = dir[0];
+        dir++;
+        int len = strlen(dir);
+        if (len > 0 && dir[len-1] == quote) {
+            dir[len-1] = '\0';
+        }
+    }
+    
+    repo = repo_init_in_dir(dir);
+    if (!repo) return;
+    
+    current_commit = repo_get_head(repo);
+    if (!current_commit) {
+        current_commit = init_repo();
+        repo_add_commit(repo, current_commit);
+        repo_set_head(repo, current_commit);
+        repo_update_branch(repo, "master", current_commit);
+        
+        repo_save_state(repo);
+    }
+    
+    staging = staging_create(current_commit);
+    
+    printf("✅ Working directory: %s\n", repo_get_workdir(repo));
+}
+
 static void cmd_debug(void) {
     if (!current_commit) {
         printf("❌ Нет коммитов\n");
@@ -272,6 +378,8 @@ static void cmd_branch(char *name) {
     }
     
     repo_create_branch(repo, name, current_commit);
+    repo_save_state(repo);
+    
     printf("✅ Ветка '%s' создана (указывает на коммит %d)\n", name, current_commit->id);
 }
 
@@ -286,7 +394,6 @@ static void cmd_checkout(char *name) {
         return;
     }
     
-    // Проверяем, есть ли несохранённые изменения
     if (staging_has_changes(staging)) {
         printf("⚠️  У вас есть несохранённые изменения в staging.\n");
         printf("   Сначала сделайте commit или reset.\n");
@@ -301,9 +408,10 @@ static void cmd_checkout(char *name) {
     repo_checkout_branch(repo, name);
     current_commit = repo_get_head(repo);
     
-    // Обновляем staging под новый коммит
     staging_destroy(staging);
     staging = staging_create(current_commit);
+    
+    repo_save_state(repo);
     
     printf("✅ Переключились на ветку '%s', коммит %d\n", name, current_commit->id);
 }
@@ -390,6 +498,7 @@ static void cmd_reset(void) {
 // ================ ГЛАВНАЯ ФУНКЦИЯ ================
 
 int main(void) {
+    auto_load_repo();
     // Настройка русской локали
     #ifdef _WIN32
         SetConsoleOutputCP(65001);
@@ -400,14 +509,14 @@ int main(void) {
     #endif
     
     printf("\n");
-    printf("╔════════════════════════════════════════════════════════════════════════╗\n");
-    printf("║                                                                            ║\n");
-    printf("║     🚀 MiniGit - Персистентная система контроля версий 🚀                 ║\n");
-    printf("║                                                                            ║\n");
-    printf("║     📍 Работает как настоящий Git: add → staging → commit                 ║\n");
-    printf("║     📍 Поддерживаются: ветки, история, персистентность                    ║\n");
-    printf("║                                                                            ║\n");
-    printf("╚════════════════════════════════════════════════════════════════════════╝\n");
+    printf("╔═════════════════════════════════════════════════════════════════════════════════╗\n");
+    printf("║                                                                                 ║\n");
+    printf("║       MiniGit - Персистентная система контроля версий                           ║\n");
+    printf("║                                                                                 ║\n");
+    printf("║       Работает как настоящий Git: add → staging → commit                        ║\n");
+    printf("║       Поддерживаются: ветки, история, персистентность                           ║\n");
+    printf("║                                                                                 ║\n");
+    printf("╚═════════════════════════════════════════════════════════════════════════════════╝\n");
     
     print_help();
     
@@ -493,14 +602,32 @@ int main(void) {
             print_help();
         }
         else if (strcmp(cmd, "exit") == 0 || strcmp(cmd, "q") == 0) {
-            printf("👋 До свидания!\n");
+            printf("До свидания!\n");
             break;
         }
         else if (strcmp(cmd, "debug") == 0) {
             cmd_debug();
         }
+        else if (strcmp(cmd, "init-dir") == 0) {
+            cmd_init_in_dir(args);
+        }
+        else if (strcmp(cmd, "load") == 0) {
+            cmd_load(args);
+        }
+        else if (strcmp(cmd, "pwd") == 0) {
+            if (repo) {
+                printf("📁 Repository directory: %s\n", repo_get_workdir(repo));
+            } else {
+                char cwd_buf[1024];
+                if (getcwd(cwd_buf, sizeof(cwd_buf))) {
+                    printf("📁 Current directory: %s\n", cwd_buf);
+                } else {
+                    printf("📁 Current directory: (unknown)\n");
+                }
+            }
+        }
         else {
-            printf("❌ Неизвестная команда: '%s'\n", cmd);
+            printf(" Неизвестная команда: '%s'\n", cmd);
             printf("   Введите 'help' для списка команд\n");
         }
     }

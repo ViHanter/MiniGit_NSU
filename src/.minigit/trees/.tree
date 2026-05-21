@@ -1,0 +1,5 @@
+name=
+is_directory=1
+children_count=2
+child=hello.txt
+child=test.txt
