@@ -23,7 +23,7 @@ TreeNode *create_empty_tree(void) {
     return root;
 }
 
-static TreeNode *create_directory_node(const char *name) {
+TreeNode *create_directory_node(const char *name) {
     TreeNode *node = (TreeNode*)malloc(sizeof(TreeNode));
     if (!node) return NULL;
 
@@ -110,7 +110,7 @@ static int find_child_index(TreeNode *dir, const char *name) {
     return -1;
 }
 
-static void append_child(TreeNode *dir, TreeNode *child) {
+void append_child(TreeNode *dir, TreeNode *child) {
     if (!dir || !child) return;
 
     TreeNode **new_children = (TreeNode**)realloc(
@@ -123,7 +123,7 @@ static void append_child(TreeNode *dir, TreeNode *child) {
     dir->children[dir->children_count++] = child;
 }
 
-static TreeNode *clone_directory_shallow(TreeNode *src) {
+TreeNode *clone_directory_shallow(TreeNode *src) {
     TreeNode *copy = create_directory_node(src && src->name ? src->name : "");
     if (!copy || !src || !src->is_directory || src->children_count == 0) {
         return copy;

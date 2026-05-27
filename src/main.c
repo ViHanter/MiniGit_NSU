@@ -4,7 +4,12 @@
 #include <locale.h>
 
 #ifdef _WIN32
+    #include <direct.h>
     #include <windows.h>
+    #include <wchar.h>
+    #include <dirent.h>
+#else
+    #include <unistd.h>
 #endif
 
 #include "core/types.h"
@@ -12,6 +17,8 @@
 #include "core/commit.h"
 #include "core/repo.h"
 #include "core/staging.h"
+#include "core/repo_storage.h"
+#include "utils.h" 
 
 // ================ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ================
 
@@ -23,50 +30,218 @@ static StagingArea *staging = NULL;
 
 static void print_help(void) {
     printf("\n");
-    printf("╔════════════════════════════════════════════════════════════════════════╗\n");
-    printf("║                         🚀 MiniGit Shell 🚀                            ║\n");
-    printf("╠════════════════════════════════════════════════════════════════════════╣\n");
-    printf("║ 📖 Команды:                                                             ║\n");
-    printf("║   init                          - инициализировать репозиторий         ║\n");
-    printf("║   add <файл> <содержимое>       - добавить файл в staging              ║\n");
-    printf("║   rm <файл>                     - удалить файл из staging              ║\n");
-    printf("║   commit <сообщение>            - создать коммит из staging            ║\n");
-    printf("║   status                        - показать статус staging              ║\n");
-    printf("║   cat <файл>                    - показать содержимое файла            ║\n");
-    printf("║   exists <файл>                 - проверить существование файла        ║\n");
-    printf("║   ls                            - список файлов в текущем коммите      ║\n");
-    printf("║   log                           - история коммитов                     ║\n");
-    printf("║   branch <имя>                  - создать ветку                        ║\n");
-    printf("║   checkout <ветка>              - переключиться на ветку               ║\n");
-    printf("║   branches                      - показать все ветки                   ║\n");
-    printf("║   merge <ветка>                 - простое слияние ветки                ║\n");
-    printf("║   count                         - посчитать tree/blob объекты          ║\n");
-    printf("║   reset                         - отменить все изменения в staging    ║\n");
-    printf("║   help, ?                       - эта справка                          ║\n");
-    printf("║   exit, q                       - выход                                ║\n");
-    printf("╚════════════════════════════════════════════════════════════════════════╝\n");
+    printf("===============================================================================\n");
+    printf("                         COO.code Repository Manager                          \n");
+    printf("===============================================================================\n");
+    printf("\n   Commands:\n");
+    printf("   init [path]                   - Initialize repository in current or specified directory\n");
+    printf("   init-dir <path>               - Same as init <path>\n");
+    printf("   load [path]                   - Load existing repository\n");
+    printf("   close                         - Close current repository\n");
+    printf("   \n");
+    printf("   add <file>                    - Add/update file from working directory\n");
+    printf("   rm <file>                     - Remove file from working directory and staging\n");
+    printf("   commit <message>              - Create commit from staged changes\n");
+    printf("   reset                         - Discard all staging changes\n");
+    printf("   status                        - Show staging status\n");
+    printf("   \n");
+    printf("   cat <file>                    - Show file content\n");
+    printf("   exists <file>                 - Check file existence\n");
+    printf("   ls                            - List files in current commit\n");
+    printf("   pwd                           - Show repository working directory\n");
+    printf("   \n");
+    printf("   log                           - Show commit history\n");
+    printf("   branch <name>                 - Create new branch\n");
+    printf("   branches                      - List all branches\n");
+    printf("   checkout <branch>             - Switch to branch\n");
+    printf("   merge <branch>                - Merge branch into current\n");
+    printf("   rollback <commit_id>          - Move current branch back to commit\n");
+    printf("   \n");
+    printf("   count                         - Count tree/blob objects\n");
+    printf("   help, ?                       - Show this help\n");
+    printf("   exit, q                       - Exit\n");
+    printf("===============================================================================\n");
 }
 
 static void print_status_line(const char *label, const char *value) {
     printf("  %-15s: %s\n", label, value);
 }
 
+static char *find_existing_repo(void) {
+    char cwd[1024];
+    if (!getcwd(cwd, sizeof(cwd))) return NULL;
+    
+    // Нормализуем путь
+    for (char *p = cwd; *p; p++) {
+        if (*p == '\\') *p = '/';
+    }
+    
+    char *path = strdup(cwd);
+    while (1) {
+        char test_path[1024];
+        // Используем двойные обратные слеши для Windows или прямые
+        snprintf(test_path, sizeof(test_path), "%s/.minigit", path);
+        
+        // Пробуем открыть как файл (проверяем существование директории)
+        DIR *dir = opendir(test_path);
+        if (dir) {
+            closedir(dir);
+            printf("DEBUG: Found repo at: %s\n", path);
+            return path;
+        }
+        
+        char *last_slash = strrchr(path, '/');
+        if (!last_slash || last_slash == path) break;
+        *last_slash = '\0';
+    }
+    
+    free(path);
+    return NULL;
+}
+
+static void auto_load_repo(void) {
+    char *repo_path = repo_load_last_repo();
+    if (repo_path && strlen(repo_path) > 0) {
+        printf("\n[INFO] Loading saved repository from: %s\n", repo_path);
+        repo = repo_load_from_dir(repo_path);
+        if (repo) {
+            current_commit = repo_get_head(repo);
+            staging = staging_create(current_commit);
+        } else {
+            printf("[WARN] Failed to load saved repository\n");
+        }
+    } else {
+        char *found = find_existing_repo();
+        if (found) {
+            printf("\n[INFO] Found repository in: %s\n", found);
+            repo = repo_load_from_dir(found);
+            if (repo) {
+                current_commit = repo_get_head(repo);
+                staging = staging_create(current_commit);
+            }
+            free(found);
+        }
+    }
+}
+
 // ================ КОМАНДЫ ================
-static void cmd_debug(void) {
-    if (!current_commit) {
-        printf("❌ Нет коммитов\n");
+static void cmd_add_file(char *filename) {
+    if (!repo) {
+        printf("[ERROR] Repository not initialized. Use 'init' command.\n");
         return;
     }
     
-    printf("\n🔍 ОТЛАДКА ДЕРЕВА:\n");
-    printf("Корневой узел: name='%s', is_dir=%d, children_count=%d\n",
+    if (!filename || strlen(filename) == 0) {
+        printf("[ERROR] Usage: add <filename>\n");
+        return;
+    }
+    
+    // Read file content from disk
+    size_t file_size;
+    char *content = read_text_file(filename, &file_size);
+    if (!content) {
+        printf("[ERROR] File '%s' not found or cannot be read\n", filename);
+        return;
+    }
+    
+    staging_add_file(staging, filename, content);
+    free(content);
+    
+    printf("[OK] File '%s' added to staging\n", filename);
+}
+
+static void cmd_close(void) {
+    if (repo) {
+        // Save state before closing
+        repo_save_state(repo);
+        
+        // Clear staging
+        if (staging) {
+            staging_destroy(staging);
+            staging = NULL;
+        }
+        
+        // Clear repository
+        free_branches();
+        repo_destroy(repo);
+        repo = NULL;
+        current_commit = NULL;
+        
+        printf("[OK] Repository closed.\n");
+    } else {
+        printf("[WARN] No open repository.\n");
+    }
+}
+
+static void cmd_load(char *args) {
+    if (repo) {
+        printf("[ERROR] Repository already loaded!\n");
+        return;
+    }
+    
+    char *dir = args ? args : ".";
+    
+    repo = repo_load_from_dir(dir);
+    if (!repo) return;
+    
+    current_commit = repo_get_head(repo);
+    staging = staging_create(current_commit);
+}
+
+static void cmd_init(char *args) {
+    if (repo) {
+        printf("[ERROR] Repository already loaded!\n");
+        printf("   First close it (close), then re-enter\n");
+        return;
+    }
+    
+    char *dir = args ? args : ".";
+    if (dir[0] == '"' || dir[0] == '\'') {
+        char quote = dir[0];
+        dir++;
+        int len = strlen(dir);
+        if (len > 0 && dir[len-1] == quote) {
+            dir[len-1] = '\0';
+        }
+    }
+    
+    repo = repo_init_in_dir(dir);
+    if (!repo) return;
+    
+    current_commit = repo_get_head(repo);
+    if (!current_commit) {
+        current_commit = init_repo();
+        repo_add_commit(repo, current_commit);
+        repo_set_head(repo, current_commit);
+        repo_update_branch(repo, "master", current_commit);
+        
+        repo_save_state(repo);
+    }
+    
+    staging = staging_create(current_commit);
+    
+    printf("[OK] Working directory: %s\n", repo_get_workdir(repo));
+}
+
+static void cmd_init_in_dir(char *args) {
+    cmd_init(args);
+}
+
+static void cmd_debug(void) {
+    if (!current_commit) {
+        printf("[ERROR] No commits\n");
+        return;
+    }
+    
+    printf("\n[DEBUG] TREE STRUCTURE:\n");
+    printf("Root node: name='%s', is_dir=%d, children_count=%d\n",
            current_commit->root->name,
            current_commit->root->is_directory,
            current_commit->root->children_count);
     
     for (int i = 0; i < current_commit->root->children_count; i++) {
         TreeNode *child = current_commit->root->children[i];
-        printf("  Ребёнок %d: name='%s', is_dir=%d\n", 
+        printf("  Child %d: name='%s', is_dir=%d\n", 
                i, child->name, child->is_directory);
         if (!child->is_directory && child->blob) {
             printf("    blob: size=%zu, hash=%s\n", 
@@ -75,126 +250,173 @@ static void cmd_debug(void) {
         }
     }
 }
-static void cmd_init(void) {
-    if (repo) {
-        printf("❌ Репозиторий уже инициализирован!\n");
-        return;
+
+static int is_absolute_path(const char *path) {
+    if (!path || strlen(path) == 0) return 0;
+#ifdef _WIN32
+    if (strlen(path) > 2 && path[1] == ':') return 1;
+#endif
+    return path[0] == '/' || path[0] == '\\';
+}
+
+static void build_worktree_path(char *buffer, size_t size, const char *path) {
+    if (!buffer || size == 0 || !path) return;
+
+    if (is_absolute_path(path)) {
+        snprintf(buffer, size, "%s", path);
+    } else {
+        snprintf(buffer, size, "%s/%s", repo_get_workdir(repo), path);
     }
-    
-    repo = repo_create();
-    current_commit = init_repo();
-    repo_add_commit(repo, current_commit);
-    repo_set_head(repo, current_commit);
-    repo_update_branch(repo, "master", current_commit);
-    
-    // Создаём staging
-    staging = staging_create(current_commit);
-    
-    printf("✅ Репозиторий инициализирован!\n");
-    print_status_line("Начальный коммит ID", "1");
-    print_status_line("Текущая ветка", "master");
-    print_status_line("Хеш коммита", current_commit->hash ? current_commit->hash : "вычисляется...");
+    normalize_path(buffer);
+}
+
+static char *trim_path_arg(char *arg) {
+    if (!arg) return NULL;
+
+    while (*arg == ' ' || *arg == '\t') arg++;
+    if (arg[0] == '"' || arg[0] == '\'') {
+        char quote = arg[0];
+        arg++;
+        int len = strlen(arg);
+        if (len > 0 && arg[len - 1] == quote) {
+            arg[len - 1] = '\0';
+        }
+    }
+    return arg;
 }
 
 static void cmd_add(char *args) {
     if (!repo) {
-        printf("❌ Репозиторий не инициализирован. Введите 'init'\n");
+        printf("[ERROR] Repository not initialized. Use 'init' command.\n");
         return;
     }
     
     if (!args || strlen(args) == 0) {
-        printf("❌ Использование: add <имя_файла> <содержимое>\n");
-        printf("   📝 Пример: add hello.txt \"Hello, World!\"\n");
+        printf("[ERROR] Usage: add <filename>\n");
+        printf("   Example: add hello.txt\n");
         return;
     }
     
-    // Парсим: add <файл> <содержимое>
-    char *file = strtok(args, " ");
-    char *content = strtok(NULL, "");
-    
-    if (!file || !content) {
-        printf("❌ Использование: add <имя_файла> <содержимое>\n");
+    char *file = trim_path_arg(args);
+    if (strlen(file) == 0) {
+        printf("[ERROR] Usage: add <filename>\n");
         return;
     }
-    
-    // Убираем кавычки, если есть
-    if (content[0] == '"' || content[0] == '\'') {
-        char quote = content[0];
-        content++;
-        int len = strlen(content);
-        if (len > 0 && content[len-1] == quote) {
-            content[len-1] = '\0';
-        }
+
+    char disk_path[1024];
+    build_worktree_path(disk_path, sizeof(disk_path), file);
+
+    size_t file_size = 0;
+    char *content = read_text_file(disk_path, &file_size);
+    if (!content) {
+        printf("[ERROR] File '%s' not found or cannot be read\n", disk_path);
+        return;
     }
     
     staging_add_file(staging, file, content);
-    printf("✅ Файл '%s' добавлен в staging (ещё не закоммичен)\n", file);
+    free(content);
+
+    printf("[OK] File '%s' added to staging (not yet committed)\n", file);
 }
 
 static void cmd_rm(char *file) {
     if (!repo) {
-        printf("❌ Репозиторий не инициализирован. Введите 'init'\n");
+        printf("[ERROR] Repository not initialized. Use 'init' command.\n");
         return;
     }
     
     if (!file || strlen(file) == 0) {
-        printf("❌ Использование: rm <имя_файла>\n");
+        printf("[ERROR] Usage: rm <filename>\n");
         return;
     }
-    
-    staging_remove_file(staging, file);
+
+    file = trim_path_arg(file);
+    if (strlen(file) == 0) {
+        printf("[ERROR] Usage: rm <filename>\n");
+        return;
+    }
+
+    char disk_path[1024];
+    build_worktree_path(disk_path, sizeof(disk_path), file);
+    size_t existing_size = 0;
+    char *existing_content = read_text_file(disk_path, &existing_size);
+    int existed_on_disk = existing_content != NULL;
+    free(existing_content);
+    int tracked = current_commit && get_file_exists(current_commit, file);
+
+    if (!tracked && !existed_on_disk) {
+        printf("[ERROR] File '%s' not found\n", disk_path);
+        return;
+    }
+
+    int removed = existed_on_disk ? remove_text_file(disk_path) : 0;
+    if (existed_on_disk && !removed) {
+        printf("[ERROR] Cannot remove file '%s'\n", disk_path);
+        return;
+    }
+
+    if (tracked) {
+        staging_remove_file(staging, file);
+    }
+
+    if (removed) {
+        printf("[OK] File '%s' removed from working directory\n", file);
+    }
+    if (tracked) {
+        printf("[OK] File '%s' staged for removal\n", file);
+    }
 }
 
 static void cmd_commit(char *message) {
     if (!repo) {
-        printf("❌ Репозиторий не инициализирован. Введите 'init'\n");
+        printf("[ERROR] Repository not initialized. Use 'init' command.\n");
         return;
     }
     
     if (!message || strlen(message) == 0) {
-        printf("❌ Использование: commit <сообщение>\n");
+        printf("[ERROR] Usage: commit <message>\n");
         return;
     }
     
     if (!staging_has_changes(staging)) {
-        printf("❌ Нет изменений для коммита. Используйте 'add' для добавления файлов\n");
+        printf("[ERROR] No changes to commit. Use 'add' to add files\n");
         return;
     }
     
     current_commit = staging_commit(repo, staging, message);
     if (current_commit) {
-        printf("✅ Коммит %d создан: '%s'\n", current_commit->id, message);
-        printf("   Хеш: %s\n", current_commit->hash ? current_commit->hash : "вычисляется...");
+        printf("[OK] Commit %d created: '%s'\n", current_commit->id, message);
+        printf("   Hash: %s\n", current_commit->hash ? current_commit->hash : "calculating...");
     }
 }
 
 static void cmd_status(void) {
     if (!repo) {
-        printf("❌ Репозиторий не инициализирован\n");
+        printf("[ERROR] Repository not initialized\n");
         return;
     }
     
-    printf("\n📊 === СТАТУС ===\n");
-    print_status_line("Текущая ветка", repo->current_branch_name ? repo->current_branch_name : "(detached)");
-    print_status_line("Текущий коммит", current_commit ? (current_commit->hash ? current_commit->hash : "none") : "none");
+    printf("\n[STATUS] Current state\n");
+    print_status_line("Current branch", repo->current_branch_name ? repo->current_branch_name : "(detached)");
+    print_status_line("Current commit", current_commit ? (current_commit->hash ? current_commit->hash : "none") : "none");
     char id_buf[32];
     if (current_commit) {
         snprintf(id_buf, sizeof(id_buf), "%d", current_commit->id);
-        print_status_line("ID коммита", id_buf);
+        print_status_line("Commit ID", id_buf);
     } else {
-        print_status_line("ID коммита", "none");
+        print_status_line("Commit ID", "none");
     }
     
-    printf("\n📁 Изменения в staging (%d):\n", staging ? staging->changed_files_count : 0);
+    printf("\n[STAGING] Changes (%d):\n", staging ? staging->changed_files_count : 0);
     if (staging && staging->changed_files_count > 0) {
         for (int i = 0; i < staging->changed_files_count; i++) {
-            printf("   • %s\n", staging->changed_files[i]);
+            printf("   - %s\n", staging->changed_files[i]);
         }
     } else {
-        printf("   (нет изменений)\n");
+        printf("   (no changes)\n");
     }
     
-    printf("\n🌿 Ветки: ");
+    printf("\n[BRANCHES] Available: ");
     int count;
     char **branches = repo_list_branches(repo, &count);
     for (int i = 0; i < count; i++) {
@@ -207,44 +429,44 @@ static void cmd_status(void) {
 
 static void cmd_cat(char *file) {
     if (!current_commit) {
-        printf("❌ Нет коммитов\n");
+        printf("[ERROR] No commits\n");
         return;
     }
     
     if (!file || strlen(file) == 0) {
-        printf("❌ Использование: cat <имя_файла>\n");
+        printf("[ERROR] Usage: cat <filename>\n");
         return;
     }
     
     char *content = get_file_content(current_commit, file);
     if (content) {
-        printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        printf("------------------------------------------------------------\n");
         printf("%s\n", content);
-        printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+        printf("------------------------------------------------------------\n");
         free(content);
     } else {
-        printf("❌ Файл '%s' не найден в текущем коммите\n", file);
+        printf("[ERROR] File '%s' not found in current commit\n", file);
     }
 }
 
 static void cmd_exists(char *file) {
     if (!current_commit) {
-        printf("❌ Нет коммитов\n");
+        printf("[ERROR] No commits\n");
         return;
     }
     
     if (!file || strlen(file) == 0) {
-        printf("❌ Использование: exists <имя_файла>\n");
+        printf("[ERROR] Usage: exists <filename>\n");
         return;
     }
     
     int exists = get_file_exists(current_commit, file);
-    printf("📄 Файл '%s': %s\n", file, exists ? "✅ существует" : "❌ не существует");
+    printf("[INFO] File '%s': %s\n", file, exists ? "[FOUND]" : "[NOT FOUND]");
 }
 
 static void cmd_ls(void) {
     if (!current_commit) {
-        printf("❌ Нет коммитов\n");
+        printf("[ERROR] No commits\n");
         return;
     }
     
@@ -253,7 +475,7 @@ static void cmd_ls(void) {
 
 static void cmd_log(void) {
     if (!current_commit) {
-        printf("❌ Нет коммитов\n");
+        printf("[ERROR] No commits\n");
         return;
     }
     
@@ -262,65 +484,67 @@ static void cmd_log(void) {
 
 static void cmd_branch(char *name) {
     if (!repo) {
-        printf("❌ Репозиторий не инициализирован\n");
+        printf("[ERROR] Repository not initialized\n");
         return;
     }
     
     if (!name || strlen(name) == 0) {
-        printf("❌ Использование: branch <имя_ветки>\n");
+        printf("[ERROR] Usage: branch <branch_name>\n");
         return;
     }
     
     repo_create_branch(repo, name, current_commit);
-    printf("✅ Ветка '%s' создана (указывает на коммит %d)\n", name, current_commit->id);
+    repo_save_state(repo);
+    
+    printf("[OK] Branch '%s' created (points to commit %d)\n", name, current_commit->id);
 }
 
 static void cmd_checkout(char *name) {
     if (!repo) {
-        printf("❌ Репозиторий не инициализирован\n");
+        printf("[ERROR] Repository not initialized\n");
         return;
     }
     
     if (!name || strlen(name) == 0) {
-        printf("❌ Использование: checkout <имя_ветки>\n");
+        printf("[ERROR] Usage: checkout <branch_name>\n");
         return;
     }
     
-    // Проверяем, есть ли несохранённые изменения
     if (staging_has_changes(staging)) {
-        printf("⚠️  У вас есть несохранённые изменения в staging.\n");
-        printf("   Сначала сделайте commit или reset.\n");
+        printf("[WARN] You have unsaved changes in staging.\n");
+        printf("   First commit or reset changes.\n");
         return;
     }
     
     if (!repo_branch_exists(repo, name)) {
-        printf("Branch '%s' does not exist.\n", name);
+        printf("[ERROR] Branch '%s' does not exist.\n", name);
         return;
     }
 
     repo_checkout_branch(repo, name);
     current_commit = repo_get_head(repo);
     
-    // Обновляем staging под новый коммит
     staging_destroy(staging);
     staging = staging_create(current_commit);
     
-    printf("✅ Переключились на ветку '%s', коммит %d\n", name, current_commit->id);
+    repo_save_state(repo);
+    
+    printf("[OK] Switched to branch '%s', commit %d\n", name, current_commit->id);
 }
 
 static void cmd_branches(void) {
     if (!repo) {
-        printf("❌ Репозиторий не инициализирован\n");
+        printf("[ERROR] Repository not initialized\n");
         return;
     }
     
     int count;
     char **branches = repo_list_branches(repo, &count);
     
-    printf("\n🌿 Ветки в репозитории:\n");
+    printf("\n[BRANCHES] Repository branches:\n");
     for (int i = 0; i < count; i++) {
-        printf("   • %s %s\n", branches[i],
-               (repo->current_branch_name && strcmp(repo->current_branch_name, branches[i]) == 0) ? "← текущая" : "");
+        printf("   - %s %s\n", branches[i],
+               (repo->current_branch_name && strcmp(repo->current_branch_name, branches[i]) == 0) ? "[CURRENT]" : "");
         free(branches[i]);
     }
     free(branches);
@@ -369,28 +593,124 @@ static void cmd_merge(char *branch_name) {
            current_commit ? current_commit->id : 0);
 }
 
+#ifdef _WIN32
+static wchar_t *utf8_to_wide_path(const char *text) {
+    if (!text) return NULL;
+
+    int needed = MultiByteToWideChar(CP_UTF8, 0, text, -1, NULL, 0);
+    if (needed <= 0) return NULL;
+
+    wchar_t *wide = (wchar_t*)malloc((size_t)needed * sizeof(wchar_t));
+    if (!wide) return NULL;
+
+    if (MultiByteToWideChar(CP_UTF8, 0, text, -1, wide, needed) <= 0) {
+        free(wide);
+        return NULL;
+    }
+    return wide;
+}
+#endif
+
+static void cmd_rollback(char *commit_id_text) {
+    if (!repo || !current_commit) {
+        printf("[ERROR] Repository not initialized\n");
+        return;
+    }
+
+    if (!commit_id_text || strlen(commit_id_text) == 0) {
+        printf("[ERROR] Usage: rollback <commit_id>\n");
+        return;
+    }
+
+    if (staging_has_changes(staging)) {
+        printf("[WARN] You have unsaved changes in staging.\n");
+        printf("   First commit or reset changes.\n");
+        return;
+    }
+
+    int commit_id = atoi(commit_id_text);
+    Commit *target = repo_find_commit_by_id(repo, commit_id);
+    if (!target) {
+        printf("[ERROR] Commit %d not found\n", commit_id);
+        return;
+    }
+
+    const char *workdir = repo_get_workdir(repo);
+
+#ifdef _WIN32
+    wchar_t old_cwd[1024];
+    if (GetCurrentDirectoryW(1024, old_cwd) == 0) {
+        printf("[ERROR] Cannot read current directory\n");
+        return;
+    }
+
+    wchar_t *wide_workdir = utf8_to_wide_path(workdir);
+    if (!wide_workdir || _wchdir(wide_workdir) != 0) {
+        free(wide_workdir);
+        printf("[ERROR] Cannot enter repository directory: %s\n", workdir);
+        return;
+    }
+    free(wide_workdir);
+#else
+    char old_cwd[1024];
+    if (!getcwd(old_cwd, sizeof(old_cwd))) {
+        printf("[ERROR] Cannot read current directory\n");
+        return;
+    }
+
+    if (chdir(workdir) != 0) {
+        printf("[ERROR] Cannot enter repository directory: %s\n", workdir);
+        return;
+    }
+#endif
+
+    int restored = restore_commit_files(current_commit, target);
+#ifdef _WIN32
+    _wchdir(old_cwd);
+#else
+    chdir(old_cwd);
+#endif
+
+    if (!restored) {
+        printf("[ERROR] Failed to restore files for commit %d\n", commit_id);
+        return;
+    }
+
+    current_commit = target;
+    repo_set_head(repo, target);
+    if (repo->current_branch_name) {
+        repo_update_branch(repo, repo->current_branch_name, target);
+    }
+
+    staging_destroy(staging);
+    staging = staging_create(current_commit);
+    repo_save_state(repo);
+
+    printf("[OK] Rolled back to commit %d\n", commit_id);
+}
+
 static void cmd_reset(void) {
     if (!repo) {
-        printf("❌ Репозиторий не инициализирован\n");
+        printf("[ERROR] Repository not initialized\n");
         return;
     }
     
     if (!staging_has_changes(staging)) {
-        printf("ℹ️  Нет изменений для сброса\n");
+        printf("[INFO] No changes to reset\n");
         return;
     }
     
-    // Уничтожаем старый staging и создаём новый
+    // Destroy old staging and create new one
     staging_destroy(staging);
     staging = staging_create(current_commit);
     
-    printf("✅ Все изменения в staging отменены\n");
+    printf("[OK] All staging changes discarded\n");
 }
 
-// ================ ГЛАВНАЯ ФУНКЦИЯ ================
+// ================ MAIN FUNCTION ================
 
 int main(void) {
-    // Настройка русской локали
+    // Setup Russian locale
     #ifdef _WIN32
         SetConsoleOutputCP(65001);
         SetConsoleCP(65001);
@@ -399,29 +719,35 @@ int main(void) {
         setlocale(LC_ALL, "ru_RU.UTF-8");
     #endif
     
+    auto_load_repo();
+    
+    // ANSI color codes
+    const char *BOLD = "\x1b[1m";
+    const char *CYAN = "\x1b[36m";
+    const char *GREEN = "\x1b[32m";
+    const char *YELLOW = "\x1b[33m";
+    const char *RESET = "\x1b[0m";
+    
     printf("\n");
-    printf("╔════════════════════════════════════════════════════════════════════════╗\n");
-    printf("║                                                                            ║\n");
-    printf("║     🚀 MiniGit - Персистентная система контроля версий 🚀                 ║\n");
-    printf("║                                                                            ║\n");
-    printf("║     📍 Работает как настоящий Git: add → staging → commit                 ║\n");
-    printf("║     📍 Поддерживаются: ветки, история, персистентность                    ║\n");
-    printf("║                                                                            ║\n");
-    printf("╚════════════════════════════════════════════════════════════════════════╝\n");
+    printf("%s===============================================================================%s\n", CYAN, RESET);
+    printf("%s                  %sCOO.code%s %s- Repository Version Control System%s\n", GREEN, BOLD, RESET, CYAN, RESET);
+    printf("%s===============================================================================%s\n", CYAN, RESET);
+    printf("\n   %sPersistent version control:%s add -> staging -> commit\n", YELLOW, RESET);
+    printf("   %sSupports:%s branches, history, persistence across sessions\n\n", YELLOW, RESET);
     
     print_help();
     
     char input[8192];
     
     while (1) {
-        printf("\n🔧 minigit> ");
+        printf("\n%scoo>%s ", GREEN, RESET);
         fflush(stdout);
         
         if (!fgets(input, sizeof(input), stdin)) {
             break;
         }
         
-        // Убираем символ новой строки
+        // Remove newline
         input[strcspn(input, "\n")] = 0;
         if ((unsigned char)input[0] == 0xEF &&
             (unsigned char)input[1] == 0xBB &&
@@ -433,7 +759,7 @@ int main(void) {
             continue;
         }
         
-        // Парсим команду
+        // Parse command
         char cmd[256];
         char *args;
         
@@ -445,7 +771,7 @@ int main(void) {
         }
         
         if (strcmp(cmd, "init") == 0) {
-            cmd_init();
+            cmd_init(args);
         }
         else if (strcmp(cmd, "add") == 0) {
             cmd_add(args);
@@ -483,6 +809,9 @@ int main(void) {
         else if (strcmp(cmd, "merge") == 0) {
             cmd_merge(args);
         }
+        else if (strcmp(cmd, "rollback") == 0 || strcmp(cmd, "revert-to") == 0) {
+            cmd_rollback(args);
+        }
         else if (strcmp(cmd, "count") == 0 || strcmp(cmd, "objects") == 0) {
             cmd_count_objects();
         }
@@ -493,19 +822,46 @@ int main(void) {
             print_help();
         }
         else if (strcmp(cmd, "exit") == 0 || strcmp(cmd, "q") == 0) {
-            printf("👋 До свидания!\n");
+            if (repo) {
+                repo_save_state(repo);
+            }
+            printf("[INFO] Goodbye!\n");
             break;
         }
         else if (strcmp(cmd, "debug") == 0) {
             cmd_debug();
         }
+        else if (strcmp(cmd, "init-dir") == 0) {
+            cmd_init_in_dir(args);
+        }
+        else if (strcmp(cmd, "load") == 0) {
+            cmd_load(args);
+        }
+        else if (strcmp(cmd, "close") == 0) {
+            cmd_close();
+        }
+        else if (strcmp(cmd, "add-file") == 0) {
+            cmd_add_file(args);
+        }
+        else if (strcmp(cmd, "pwd") == 0) {
+            if (repo) {
+                printf("[INFO] Repository directory: %s\n", repo_get_workdir(repo));
+            } else {
+                char cwd_buf[1024];
+                if (getcwd(cwd_buf, sizeof(cwd_buf))) {
+                    printf("[INFO] Current directory: %s\n", cwd_buf);
+                } else {
+                    printf("[INFO] Current directory: (unknown)\n");
+                }
+            }
+        }
         else {
-            printf("❌ Неизвестная команда: '%s'\n", cmd);
-            printf("   Введите 'help' для списка команд\n");
+            printf("[ERROR] Unknown command: '%s'\n", cmd);
+            printf("   Type 'help' for list of commands\n");
         }
     }
     
-    // Очистка
+    // Cleanup
     if (staging) {
         staging_destroy(staging);
     }

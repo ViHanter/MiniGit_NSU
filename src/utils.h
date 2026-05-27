@@ -23,6 +23,7 @@ int write_text_file(const char *path, const char *content, size_t size);
 int remove_text_file(const char *path);
 int ensure_minigit_storage(void);
 int store_blob_object(const char *hash, const char *content, size_t size);
+void set_minigit_storage_base(const char *path);
 void normalize_path(char *path);
 
 #endif

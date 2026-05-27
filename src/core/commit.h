@@ -30,4 +30,7 @@ void free_commit(Commit *commit);
 Commit* find_commit_by_id(Commit **all_commits, int count, int id);
 int count_objects(Commit *commit, int *tree_count, int *blob_count);
 
+void add_child_commit(Commit *parent, Commit *child);
+void commit_note_loaded_id(int id);
+
 #endif

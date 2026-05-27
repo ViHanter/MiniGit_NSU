@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "repo_storage.h"
 
 static void add_changed_file(StagingArea *staging, const char *path) {
     if (!staging || !path) return;
@@ -135,6 +136,8 @@ Commit *staging_commit(Repository *repo, StagingArea *staging, const char *messa
             repo_update_branch(repo, repo->current_branch_name, new_commit);
         }
         repo_set_head(repo, new_commit);
+        
+        repo_save_state(repo);
     }
 
     staging->pending_tree = NULL;

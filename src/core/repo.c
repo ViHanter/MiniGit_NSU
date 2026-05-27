@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include "repo_storage.h"
 
 static void ensure_commits_capacity(Repository *repo) {
     if (repo->commits_count >= repo->commits_capacity) {
@@ -255,6 +256,8 @@ Commit *merge_simple(Repository *repo, Commit *base, Commit *other, const char *
             repo_update_branch(repo, repo->current_branch_name, new_commit);
         }
         repo_set_head(repo, new_commit);
+        
+        repo_save_state(repo);
     }
     return new_commit;
 }
