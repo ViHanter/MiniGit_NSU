@@ -363,7 +363,7 @@ static void repo_link_commits(Repository *repo) {
 
 Repository *repo_init_in_dir(const char *path) {
     if (!ensure_minigit_dir(path)) {
-        printf("❌ Cannot initialize repository in '%s'\n", path ? path : ".");
+        printf("[ERROR] Cannot initialize repository in '%s'\n", path ? path : ".");
         return NULL;
     }
     
@@ -372,8 +372,9 @@ Repository *repo_init_in_dir(const char *path) {
     
     repo_set_workdir(repo, path);
     repo_save_state(repo);
+    repo_save_last_repo(path);
     
-    printf("✅ Repository initialized in '%s'\n", path ? path : ".");
+    printf("[OK] Repository initialized in '%s'\n", path ? path : ".");
     return repo;
 }
 
@@ -385,13 +386,13 @@ Repository *repo_load_from_dir(const char *path) {
     #ifdef _WIN32
         DWORD attrs = GetFileAttributes(minigit_path);
         if (attrs == INVALID_FILE_ATTRIBUTES || !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
-            printf("❌ Not a minigit repository: %s\n", path ? path : ".");
+            printf("[ERROR] Not a minigit repository: %s\n", path ? path : ".");
             return NULL;
         }
     #else
         struct stat st;
         if (stat(minigit_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
-            printf("❌ Not a minigit repository: %s\n", path ? path : ".");
+            printf("[ERROR] Not a minigit repository: %s\n", path ? path : ".");
             return NULL;
         }
     #endif
@@ -402,7 +403,7 @@ Repository *repo_load_from_dir(const char *path) {
     
     FILE *f = fopen(head_path, "r");
     if (!f) {
-        printf("⚠️ Repository exists but appears corrupted\n");
+        printf("[WARN] Repository exists but appears corrupted\n");
         return NULL;
     }
     
@@ -490,12 +491,63 @@ Repository *repo_load_from_dir(const char *path) {
     }
     
     repo->current_branch_name = strdup(branch_name);
+    repo_save_last_repo(path);
     
-    printf("✅ Repository loaded from '%s'\n", path ? path : ".");
+    printf("[OK] Repository loaded from '%s'\n", path ? path : ".");
     printf("   HEAD: commit %d on branch '%s'\n", head_id, branch_name);
     printf("   Total commits: %d\n", repo->commits_count);
     
     return repo;
+}
+
+// ================ CONFIG FUNCTIONS ================
+
+static char *config_file_path = NULL;
+
+static const char *get_config_file(void) {
+    if (config_file_path) return config_file_path;
+    
+    #ifdef _WIN32
+    const char *home = getenv("USERPROFILE");
+    #else
+    const char *home = getenv("HOME");
+    #endif
+    
+    if (!home) home = ".";
+    
+    static char path[1024];
+    snprintf(path, sizeof(path), "%s/.coo_code_config", home);
+    
+    config_file_path = path;
+    return path;
+}
+
+void repo_save_last_repo(const char *path) {
+    if (!path) return;
+    
+    const char *config = get_config_file();
+    FILE *f = fopen(config, "w");
+    if (f) {
+        fprintf(f, "%s\n", path);
+        fclose(f);
+    }
+}
+
+char *repo_load_last_repo(void) {
+    const char *config = get_config_file();
+    FILE *f = fopen(config, "r");
+    if (!f) return NULL;
+    
+    static char path[1024];
+    if (fgets(path, sizeof(path), f)) {
+        path[strcspn(path, "\n")] = 0;
+        fclose(f);
+        if (strlen(path) > 0) {
+            return path;
+        }
+    }
+    fclose(f);
+    return NULL;
 }
 
 int repo_save_state(Repository *repo) {

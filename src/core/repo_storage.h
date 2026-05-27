@@ -19,4 +19,10 @@ const char *repo_get_workdir(Repository *repo);
 // Установка рабочей директории
 void repo_set_workdir(Repository *repo, const char *path);
 
+// Сохранение последнего репозитория в конфиг
+void repo_save_last_repo(const char *path);
+
+// Загрузка последнего репозитория из конфига
+char *repo_load_last_repo(void);
+
 #endif

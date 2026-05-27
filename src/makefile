@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -I. -Wall
-TARGET = minigit.exe
+TARGET = coo.exe
 
 OBJS = main.o \
        core/commit.o \
