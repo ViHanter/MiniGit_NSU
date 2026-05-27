@@ -35,7 +35,6 @@ static void print_help(void) {
     printf("===============================================================================\n");
     printf("\n   Commands:\n");
     printf("   init [path]                   - Initialize repository in current or specified directory\n");
-    printf("   init-dir <path>               - Same as init <path>\n");
     printf("   load [path]                   - Load existing repository\n");
     printf("   close                         - Close current repository\n");
     printf("   \n");
@@ -223,9 +222,6 @@ static void cmd_init(char *args) {
     printf("[OK] Working directory: %s\n", repo_get_workdir(repo));
 }
 
-static void cmd_init_in_dir(char *args) {
-    cmd_init(args);
-}
 
 static void cmd_debug(void) {
     if (!current_commit) {
@@ -522,6 +518,19 @@ static void cmd_checkout(char *name) {
     }
 
     repo_checkout_branch(repo, name);
+    
+    Commit *new_head = repo_get_head(repo);
+    const char *workdir = repo_get_workdir(repo);
+    char old_cwd[1024];
+    if (getcwd(old_cwd, sizeof(old_cwd))) {
+        if (chdir(workdir) == 0) {
+            if (!restore_commit_files(NULL, new_head)) {
+                printf("[WARN] Some files could not be restored\n");
+            }
+            chdir(old_cwd);
+        }
+    }
+    
     current_commit = repo_get_head(repo);
     
     staging_destroy(staging);
@@ -531,7 +540,6 @@ static void cmd_checkout(char *name) {
     
     printf("[OK] Switched to branch '%s', commit %d\n", name, current_commit->id);
 }
-
 static void cmd_branches(void) {
     if (!repo) {
         printf("[ERROR] Repository not initialized\n");
@@ -830,9 +838,6 @@ int main(void) {
         }
         else if (strcmp(cmd, "debug") == 0) {
             cmd_debug();
-        }
-        else if (strcmp(cmd, "init-dir") == 0) {
-            cmd_init_in_dir(args);
         }
         else if (strcmp(cmd, "load") == 0) {
             cmd_load(args);
