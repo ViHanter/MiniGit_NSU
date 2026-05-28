@@ -27,6 +27,6 @@ Commit *merge_simple(Repository *repo, Commit *base, Commit *other, const char *
 
 // Вспомогательные
 void repo_print_status(Repository *repo);
-void free_branches(void);  // <-- ДОБАВИТЬ ЭТУ СТРОКУ
+void free_branches(void);
 
 #endif
